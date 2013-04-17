@@ -1,3 +1,5 @@
+package cn.benworks.cache.ehcached;
+
 public class EhcachedTest {
 
 	/**
