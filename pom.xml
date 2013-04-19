@@ -13,6 +13,7 @@
 		<module>benworks-sdk-utils</module>
 		<module>benworks-sdk-cache</module>
 		<module>benworks-sdk-socket</module>
+		<module>benworks-sdk-event</module>
 	</modules>
 
 
