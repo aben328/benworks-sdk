@@ -1,20 +1,17 @@
-/**
- * 
- */
 package cn.benworks.sdk.event.impl;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArraySet;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,7 +26,7 @@ import cn.benworks.sdk.event.exception.LoggerExceptionHandler;
 /**
  * @author Ben
  */
-public abstract class AbstractEventListenerRegister<Event extends ApplicationEvent> {
+public abstract class OnEventListenerRegister<Event extends ApplicationEvent> {
 	private static final LoggerExceptionHandler EXCEPTION_HANDLER = new LoggerExceptionHandler();
 	private static final Logger logger = LoggerFactory.getLogger(AbstractEventListenerRegister.class);
 
@@ -45,15 +42,15 @@ public abstract class AbstractEventListenerRegister<Event extends ApplicationEve
 	};
 
 	private final Class<Event> genericEventClass;
-	private Map<Class<Event>, MethodInvokerHolder<Event>> acceptEventMapping;
-	private Map<Class<Event>, HashSet<Class<Event>>> eventClassesMapping;
+	private Map<Class<Event>, ArrayList<ApplicationEventListener<Event>>> acceptEventMapping;
+	private Map<Class<Event>, CopyOnWriteArraySet<Class<Event>>> eventClassesMapping;
 
 	@SuppressWarnings("unchecked")
-	public AbstractEventListenerRegister() {
+	public OnEventListenerRegister() {
 		genericEventClass = (Class<Event>) ((ParameterizedType) getClass().getGenericSuperclass())
 				.getActualTypeArguments()[0];
-		acceptEventMapping = new ConcurrentHashMap<Class<Event>, MethodInvokerHolder<Event>>();
-		eventClassesMapping = new HashMap<Class<Event>, HashSet<Class<Event>>>();
+		acceptEventMapping = new ConcurrentHashMap<Class<Event>, ArrayList<ApplicationEventListener<Event>>>();
+		eventClassesMapping = new ConcurrentHashMap<Class<Event>, CopyOnWriteArraySet<Class<Event>>>();
 	}
 
 	/**
@@ -65,16 +62,18 @@ public abstract class AbstractEventListenerRegister<Event extends ApplicationEve
 		for (Method m : listener.getClass().getMethods()) {
 			if (isVaildListenerMethod(m)) {
 				Class<Event> eventClass = (Class<Event>) m.getParameterTypes()[0];
-				MethodInvoker<Event> invoker = new MethodInvoker<Event>(m, listener);
+				// MethodInvoker<Event> invoker = new MethodInvoker<Event>(m, listener);
 				// add to AcceptEvent Mapping
 				synchronized (acceptEventMapping) {
-					MethodInvokerHolder<Event> holder = acceptEventMapping.get(eventClass);
+					ArrayList<ApplicationEventListener<Event>> holder = acceptEventMapping.get(eventClass);
 					if (holder == null) {
-						holder = new MethodInvokerHolder<Event>(eventClass);
+						holder = new ArrayList<ApplicationEventListener<Event>>();
 						acceptEventMapping.put(eventClass, holder);
 					}
-					holder.add(invoker);
-//					Collections.sort(holder, LISTENER_ORDER_COMPARATOR);
+					if (holder.contains(listener))
+						return;
+					holder.add(listener);
+					Collections.sort(holder, LISTENER_ORDER_COMPARATOR);
 				}
 			}
 		}
@@ -88,15 +87,16 @@ public abstract class AbstractEventListenerRegister<Event extends ApplicationEve
 		for (Method m : listener.getClass().getMethods()) {
 			if (isVaildListenerMethod(m)) {
 				Class<Event> eventClass = (Class<Event>) m.getParameterTypes()[0];
-				MethodInvoker<Event> invoker = new MethodInvoker<Event>(m, listener);
+				// MethodInvoker<Event> invoker = new MethodInvoker<Event>(m, listener);
 				// remove from AcceptEvent Mapping
 				synchronized (acceptEventMapping) {
-					MethodInvokerHolder<Event> holder = acceptEventMapping.get(eventClass);
-					if (holder == null) {
-						holder = new MethodInvokerHolder<Event>(eventClass);
-						acceptEventMapping.put(eventClass, holder);
+					List<ApplicationEventListener<Event>> holder = acceptEventMapping.get(eventClass);
+					if (holder != null) {
+						holder.remove(listener);
+						if (holder.size() == 0) {
+							acceptEventMapping.remove(eventClass);
+						}
 					}
-					holder.remove(invoker);
 				}
 			}
 		}
@@ -105,14 +105,14 @@ public abstract class AbstractEventListenerRegister<Event extends ApplicationEve
 	public synchronized void unregisterAll() {
 		Set<Class<Event>> classSet = acceptEventMapping.keySet();
 		for (Class<Event> class1 : classSet) {
-			MethodInvokerHolder<Event> holder = acceptEventMapping.get(class1);
-			holder.clearAll();
+			List<ApplicationEventListener<Event>> holder = acceptEventMapping.get(class1);
+			holder.clear();
 		}
 		acceptEventMapping.clear();
 
 		Set<Class<Event>> eventSet = eventClassesMapping.keySet();
 		for (Class<Event> class2 : eventSet) {
-			HashSet<Class<Event>> eventList = eventClassesMapping.get(class2);
+			CopyOnWriteArraySet<Class<Event>> eventList = eventClassesMapping.get(class2);
 			eventList.clear();
 		}
 		eventClassesMapping.clear();
@@ -139,9 +139,11 @@ public abstract class AbstractEventListenerRegister<Event extends ApplicationEve
 
 		List<MethodInvokerHolder<Event>> holders = new LinkedList<MethodInvokerHolder<Event>>();
 		for (Class<Event> evtClass : eventList) {
-			MethodInvokerHolder<Event> holder = acceptEventMapping.get(evtClass);
+			List<ApplicationEventListener<Event>> holder = acceptEventMapping.get(evtClass);
 			if (holder != null) {
-				holders.add(holder);
+				for (ApplicationEventListener<Event> appEventListener : holder) {
+					appEventListener.on(event);
+				}
 			}
 		}
 
@@ -181,16 +183,17 @@ public abstract class AbstractEventListenerRegister<Event extends ApplicationEve
 	}
 
 	private Set<Class<Event>> getEventList(Class<Event> eventClass) {
-		HashSet<Class<Event>> eventClasses = eventClassesMapping.get(eventClass);
+		CopyOnWriteArraySet<Class<Event>> eventClasses = eventClassesMapping.get(eventClass);
 		if (eventClasses == null) {
-			eventClasses = new HashSet<Class<Event>>();
+			eventClasses = new CopyOnWriteArraySet<Class<Event>>();
 			travelEventStructure(eventClasses, eventClass);
 			eventClassesMapping.put(eventClass, eventClasses);
 		}
 		return eventClasses;
 	}
 
-	private void travelEventStructure(HashSet<Class<Event>> eventClasses, Class<Event> eventClass) {
+	@SuppressWarnings("unchecked")
+	private void travelEventStructure(Set<Class<Event>> eventClasses, Class<Event> eventClass) {
 		if (eventClass == genericEventClass) {
 			eventClasses.add(eventClass);
 			return;
@@ -206,9 +209,17 @@ public abstract class AbstractEventListenerRegister<Event extends ApplicationEve
 		}
 	}
 
-	private void travelEventInterfaceStructure(HashSet<Class<Event>> eventClasses, Class<Event> eventInterface) {
+	private void travelEventInterfaceStructure(Set<Class<Event>> eventClasses, Class<Event> eventInterface) {
 		if (isListenerAwareInterface(eventInterface) || eventInterface == genericEventClass) {
 			eventClasses.add(eventInterface);
+		}
+		if (eventInterface == genericEventClass) {
+			// eventClasses.add(eventInterface);
+		}
+		for (Class<?> evtIf : eventInterface.getInterfaces()) {
+			if (genericEventClass.isAssignableFrom(evtIf)) {
+				travelEventInterfaceStructure(eventClasses, eventInterface);
+			}
 		}
 	}
 
